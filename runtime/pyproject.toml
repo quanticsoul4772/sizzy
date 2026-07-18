@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devharness-runtime"
+version = "0.1.0"
+description = "devharness runtime: event store, projections, boot checks"
+license = { text = "MIT" }  # the table form — the string SPDX form needs setuptools>=77, floor here is 68
+requires-python = ">=3.11"
+dependencies = ["msgspec>=0.18", "claude-agent-sdk>=0.1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-xdist>=3", "pytest-asyncio>=0.23"]
+tui = ["textual>=0.50"]  # the interactive operator console (python -m devharness.console); optional
+
+[project.scripts]
+devharness = "devharness.__main__:main"  # #L3: `devharness <subcommand>` dispatches to cli.<subcommand>
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["devharness*"]
+
+[tool.setuptools.package-data]
+"devharness.panel" = ["static/*.html"]  # the web control panel serves its self-contained UI page

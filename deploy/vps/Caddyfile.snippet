@@ -1,0 +1,17 @@
+# Add this INSIDE your site block in /etc/caddy/Caddyfile. Then: sudo systemctl reload caddy
+#
+# The panel is a WRITE surface (it can drive builds) — basic auth is MANDATORY. Generate the hash:
+#   caddy hash-password --plaintext 'YOUR_STRONG_PASSWORD'
+# and paste it below. handle_path strips the /panel prefix, so the panel sees /state, /events, etc.;
+# the UI page fetches relative to its own /panel/ base, so this lines up without further config.
+#
+# Host header: Caddy's reverse_proxy forwards the ORIGINAL Host header by default — required, because
+# the panel's request gate (rev 0.4.15) rejects any request whose Host is neither loopback nor
+# DEVHARNESS_PANEL_PUBLIC_HOST (set that env in the systemd unit to this site's domain).
+
+handle_path /panel/* {
+	basicauth {
+		<panel-user> <PASTE_BCRYPT_HASH_HERE>
+	}
+	reverse_proxy 127.0.0.1:8090
+}

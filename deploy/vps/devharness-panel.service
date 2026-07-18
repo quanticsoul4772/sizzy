@@ -1,0 +1,45 @@
+# devharness web control panel — plain systemd service (run as the panel's service user; replace
+# <service-user> below with that account).
+# Install: sudo cp deploy/vps/devharness-panel.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# Enable:  sudo systemctl enable --now devharness-panel
+#
+# Auth: a headless box has no interactive `claude` login, so the roles authenticate via a valid
+# ANTHROPIC_API_KEY. systemd decrypts the credstore key into
+# $CREDENTIALS_DIRECTORY and the panel bridges it into the env (server._resolve_auth). The MCP servers
+# read the same key from ~/.claude.json's per-server env. HOME must be set + writable or the bundled
+# `claude` CLI hangs at its initialize handshake. (Since rev 0.4.6 subscription auth is the panel's
+# DEFAULT when no credential is bridged — a stray env key gets cleared, matching the TUI/run_*
+# convention; a headless deploy WITHOUT systemd credentials must set
+# Environment=DEVHARNESS_PANEL_APIKEY=1 to keep an env-supplied key.)
+#
+# DEVHARNESS_PANEL_PUBLIC_HOST (rev 0.4.15): the panel's request gate rejects (403) any request whose
+# Host header is neither loopback nor this value — set it to the public domain your reverse proxy
+# serves. Without it, every proxied request (the UI page included) is rejected.
+[Unit]
+Description=devharness web control panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<service-user>
+Group=<service-user>
+WorkingDirectory=/home/<service-user>/devharness
+Environment=HOME=/home/<service-user>
+Environment=DEVHARNESS_DB=/home/<service-user>/devharness/var/devharness.db
+Environment=DEVHARNESS_PANEL_ADDR=127.0.0.1:8090
+Environment=DEVHARNESS_PANEL_PUBLIC_HOST=your-host.example.com
+Environment=DEVHARNESS_ALLOW_HOST_SHELL=1
+LoadCredentialEncrypted=anthropic-key:/etc/credstore/anthropic-key.encrypted
+LoadCredentialEncrypted=voyage-key:/etc/credstore/voyage-key.encrypted
+ExecStart=/home/<service-user>/devharness/.venv/bin/python -m devharness.panel
+Restart=on-failure
+RestartSec=5
+# A build holds the single write lock; give a stopping unit time to let an in-flight step's finally
+# release it, so a restart never strands the lock (drive with no build running when you can).
+TimeoutStopSec=180
+MemoryMax=4G
+CPUQuota=300%
+
+[Install]
+WantedBy=multi-user.target

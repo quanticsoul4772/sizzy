@@ -1,0 +1,45 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -e ./runtime[test]
+      - run: pytest tests/runtime -q -n auto  # xdist: ~52s -> ~18s (the suite is parallel-safe)
+      # #M3: specledger's own unit tests (its CI wiring was the spec's deferred "later, separate task").
+      # `python -m` puts the repo root on sys.path so `import specledger` resolves. NOT run as a
+      # repo-drift CHECK (that would be a build-failing gate the signed spec did not authorize).
+      - run: python -m pytest tests/specledger -q
+      # jqlite (the second project) — its own unit tests, same wiring as specledger. rich is NOT
+      # installed here on purpose: jqlite's spec is stdlib-only, so CI exercises the no-rich path (the
+      # optional --color extra falls back cleanly; the color test guards its highlight assertion on
+      # rich's actual availability, so the suite is green with or without it).
+      - run: python -m pytest tests/jqlite -q
+      # csvlite (the third project) — its own unit tests, same wiring as specledger/jqlite
+      # (stdlib-only; `python -m` puts the repo root on sys.path so `import csvlite` resolves).
+      - run: python -m pytest tests/csvlite -q
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+        working-directory: sidecar
+
+  svelte:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: npm install
+        working-directory: dashboard
+      - run: npm run check
+        working-directory: dashboard

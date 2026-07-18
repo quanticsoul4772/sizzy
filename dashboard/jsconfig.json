@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*.js", "src/**/*.svelte", "global.d.ts", "vite.config.js", "svelte.config.js"]
+}

@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.tox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Rust
+target/
+**/*.rs.bk
+# Cargo.lock is tracked: the sidecar is a binary, so the lock file is committed.
+
+# Node / Svelte
+node_modules/
+.svelte-kit/
+.vite/
+*.log
+
+# SQLite (event log lives here once B0 ships; never check in)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+# per-project event stores + any other runtime output
+var/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+# operator-local Claude Code settings (never committed)
+.claude/settings.local.json
+*.key
+**/credentials*
+**/*token*
+
+# Misc
+*.stackdump
+*.tmp
+
+# Playwright MCP render artifacts (screenshots/snapshots/console logs)
+.playwright-mcp/

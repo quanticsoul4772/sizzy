@@ -1,0 +1,10 @@
+# Normalize line endings: LF in the repo + on checkout everywhere (Windows host, Linux CI,
+# WSL/VPS sandboxes). Ends the "LF will be replaced by CRLF" warning on every commit.
+* text=auto eol=lf
+
+# Binary / generated assets — never normalize
+*.png binary
+*.jpg binary
+*.gif binary
+*.db binary
+*.ico binary

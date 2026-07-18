@@ -1,0 +1,26 @@
+[package]
+name = "sidecar"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "devharness SSE sidecar — read-only tail of the SQLite event log, per-channel SSE fan-out"
+
+[lib]
+name = "sidecar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sidecar"
+path = "src/main.rs"
+
+[dependencies]
+# axum chosen earlier via parallax decide (first-class SSE, tokio/hyper).
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+# rusqlite (bundled SQLite) for the read-only tail. The async boundary is the
+# tokio broadcast channel (poller thread -> SSE handlers), not the DB driver, so a
+# sync driver fits better than sqlx here and compiles far lighter.
+rusqlite = { version = "0.39", features = ["bundled"] }
+# CORS so the browser dashboard (a different origin) can open EventSource streams.
+tower-http = { version = "0.6", features = ["cors"] }

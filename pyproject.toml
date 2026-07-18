@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jqlite"
+version = "0.1.0"
+description = "A dependency-free, stdlib-only jq-style JSON query CLI."
+readme = "jqlite/README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+
+# Optional extras. jqlite's core stays dependency-free; the ``color`` extra adds
+# rich solely to power the optional ``--color`` syntax-highlighting flag, which
+# degrades cleanly to plain output when rich is not installed.
+# Install with: pip install "jqlite[color]"  (pinned set in requirements-color.lock)
+[project.optional-dependencies]
+color = ["rich==13.9.4"]
+
+[project.scripts]
+jqlite = "jqlite.cli:main"
+
+[tool.setuptools]
+packages = ["jqlite"]
+
+# Tests live under tests/. Scoping discovery here keeps a bare ``pytest`` run
+# from collecting source modules named ``test_*.py`` (e.g. the runtime verifier
+# modules). The CI matrix passes explicit paths (``pytest tests/runtime`` etc.),
+# which override testpaths, so this only affects the no-argument invocation.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"  # Textual App.run_test() pilots are async (the console TUI tests)
+asyncio_default_fixture_loop_scope = "function"  # pin the async-fixture loop scope (silences the pytest-asyncio warning)
