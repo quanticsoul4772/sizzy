@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -39,9 +40,11 @@ from devharness.events.registry import TerminalOutcome
 from devharness.health import emit_snapshot
 from devharness.mcp.mcp_reasoning import MCPReasoningClient
 from devharness.mcp.base import TRANSIENT_SDK_RESULT
+from devharness.mcp.config import server_cfg as config_server_cfg
 from devharness.mcp.parallax import ParallaxClient
 from devharness.monitor.sweep import run_invariant_sweep
 from devharness.models import model_for_tier
+from devharness.retro.drive import HALT_MESSAGE
 from devharness.roles.developer import DeveloperRole
 from devharness.roles.director import DirectorRole
 from devharness.roles.integration import integrate
@@ -58,6 +61,11 @@ from devharness.worktree.hygiene import purge_bytecode_caches
 # base_path is NOT this repo is an "external target": its certified change lands on a per-task scratch
 # branch (mirrors run_developer), not detached-and-discarded as an internal devharness build is.
 _DEVHARNESS_REPO = Path(__file__).resolve().parents[3]
+
+# Post-build auto-retro bound (rev 0.4.23): at most this many terminals drain inside a dispatch call —
+# the just-settled terminal plus a few stragglers. A deep backlog belongs to the explicit surfaces
+# (TUI `L`, panel /retro/run, run_maintenance --retro-only), not to a build's own latency budget.
+_AUTO_RETRO_MAX = 5
 
 
 def _scratch_commit_identity() -> tuple[str, str]:
@@ -167,22 +175,18 @@ class AllTasksSettled(RuntimeError):
 
 
 def _server_cfg(name: str) -> dict:
-    """Read a named MCP server's live launch spec from ~/.claude.json (never embed it).
+    """A named MCP server's live launch spec (operator-local, machine-specific, never committed).
 
-    Mirrors ``run_developer``'s ``_server_cfg`` / ``ConsoleDirector``'s reader: the launch spec
-    is operator-local and machine-specific, so it is read live, never committed.
+    rev 0.4.25: delegates to ``devharness.mcp.config.server_cfg`` — the single config source,
+    honoring ``DEVHARNESS_MCP_CONFIG`` with the ``~/.claude.json`` fallback. This NAME survives
+    because ``console/oss.py`` imports it cross-module; ``MCPConfigError`` IS a ``RuntimeError``,
+    so every existing catch (e.g. the post-build auto-retro advisory guard) holds.
     """
-    path = Path.home() / ".claude.json"
-    if not path.exists():
-        raise RuntimeError(f"no {path} — cannot find the {name} MCP server launch spec")
-    server = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}).get(name)
-    if not server:
-        raise RuntimeError(f"{name} not found under mcpServers in ~/.claude.json")
-    return server
+    return config_server_cfg(name)
 
 
 def live_parallax_client(model=None) -> ParallaxClient:
-    """The live parallax client, built from ~/.claude.json.
+    """The live parallax client, built from the MCP config source (DEVHARNESS_MCP_CONFIG, else ~/.claude.json).
 
     Mirrors ``run_developer``'s ``verifier_parallax``. ``model`` routes the client to a cost tier
     (rev 0.3.82): the verifier + fresh-context reviewer pass nothing and keep the frontier default
@@ -190,6 +194,59 @@ def live_parallax_client(model=None) -> ParallaxClient:
     model. ``None`` -> ``default_model()`` via ``MCPClient``.
     """
     return ParallaxClient(mcp_servers={"parallax": _server_cfg("parallax")}, model=model)
+
+
+def run_retro_drain(conn, writer, *, retro_engine=None, now_millis=None, max_retro=10_000) -> dict:
+    """One §S7 retro pass against the connected store (rev 0.4.23): drain unprocessed terminals
+    (T0 + T1 LLM residue), then any invariant_violated / fault_handling_regression signals (T0-only).
+
+    Shared by the post-build auto-drain (``ConsoleDeveloper._drain_retro``, advisory + bounded),
+    the TUI ``L`` action, and the panel ``/retro/run`` route (both of which SURFACE errors — an
+    explicit operator action should say why it failed, not silently no-op). ``retro_engine`` is the
+    test seam; ``None`` builds the live T1 residue engine. ``LLMUnavailable`` halts the terminal
+    drain with the queue intact (rev 0.3.57); ``held`` distinguishes a fermata-held store (writer
+    lock / non-terminal lifecycle row — e.g. an orphan ``running`` row) from an empty queue.
+
+    Residue spend emits role-scoped under the stable ``maintenance`` correlation, NOT any build's —
+    the drain consumes other correlations' backlog terminals (SC-6). The emission sits in a
+    ``finally`` (review catch): a mid-drain exception AFTER real T1 spend on earlier terminals must
+    not lose the realized cost from the ledger — those terminals' retro_runs exist, so they are
+    never re-analyzed/re-billed and the spend would be unrecoverable."""
+    from devharness.maintenance.fermata import FermataPacing
+    from devharness.retro.drive import HALT_MESSAGE, HELD_MESSAGE, drain_signal_retro, drain_terminal_retro
+    from devharness.retro.engine import RetroEngine
+    from devharness.retro.llm_client import make_llm_fn
+    from devharness.retro.scheduler import RetroScheduler
+    from devharness.retro.signal_scheduler import SignalRetroScheduler
+
+    residue_client = None
+    engine = retro_engine
+    if engine is None:
+        residue_client = live_parallax_client(model=model_for_tier("T1"))
+        engine = RetroEngine(llm_fn=make_llm_fn(residue_client))
+    fermata = FermataPacing()
+    try:
+        terminals = drain_terminal_retro(conn, writer, RetroScheduler(engine=engine, fermata=fermata),
+                                         max_retro=max_retro, now_millis=now_millis)
+        signals = drain_signal_retro(conn, writer,
+                                     SignalRetroScheduler(engine=RetroEngine(llm_fn=None), fermata=fermata),
+                                     now_millis=now_millis)
+    finally:
+        if residue_client is not None:
+            try:
+                emit_client_costs(writer, [residue_client], role="retro_residue",
+                                  correlation_id="maintenance", now_millis=now_millis)
+            except Exception:  # noqa: BLE001 — best-effort in a finally: never mask the drain's error
+                pass
+    if terminals.held:
+        summary = HELD_MESSAGE
+    else:
+        summary = f"{len(terminals.processed)} terminal(s) analyzed · {len(signals.processed)} signal(s)"
+        if terminals.halted:
+            summary += f" · {HALT_MESSAGE} ({terminals.halt_reason})"
+    return {"terminals": list(terminals.processed), "signals": list(signals.processed),
+            "halted": terminals.halted, "halt_reason": terminals.halt_reason,
+            "held": terminals.held, "summary": summary}
 
 
 def _stub_reasoning() -> MCPReasoningClient:
@@ -214,9 +271,17 @@ class ConsoleDeveloper:
     """
 
     def __init__(self, conn, writer, *, base_path=None, test_target=None, test_command=None,
-                 now_millis=None):
+                 now_millis=None, auto_retro=False, retro_engine=None):
         self._conn = conn
         self._writer = writer  # an EventBus — emit_sync is the only sanctioned write path
+        # §S7 post-build auto-retro (rev 0.4.23). Default OFF at the class so the direct-construction
+        # test posture stays uncontaminated (no live-LLM engine, no retro_run events injected into
+        # existing dispatch tests); the two production surfaces (TUI _developer_surface + panel
+        # /dispatch) construct with auto_retro=True, so every operator-driven build feeds the spine.
+        # ``retro_engine`` is the test seam (mirrors the injected parallax clients): None -> the live
+        # residue engine (T1 parallax) is built at drain time inside the advisory guard.
+        self._auto_retro = auto_retro
+        self._retro_engine = retro_engine
         # The repo the developer writes into; defaults to the harness checkout root (the
         # validated devharness-internal target). Mirrors run_developer's DEVHARNESS_TARGET_REPO.
         # Default to the absolute devharness repo (not "." — which resolves against CWD, so launching
@@ -397,7 +462,44 @@ class ConsoleDeveloper:
             run_invariant_sweep(self._conn, self._writer)
         except Exception:  # noqa: BLE001
             pass
+        # §S7 post-build auto-retro (rev 0.4.23): drain the learning spine now that the build settled —
+        # retro previously ran only inside the manual single-store run_maintenance script, so console/
+        # panel-driven builds never fed it (9 stores accumulated terminals with zero retro_runs).
+        self._drain_retro()
         return terminal
+
+    def _drain_retro(self) -> None:
+        """The post-build auto-drain (rev 0.4.23). The dispatch's terminal is settled and the write
+        lock released here, so the fermata passes; when it doesn't (another writer), the drain no-ops
+        and the terminals stay queued for the next build or an explicit retro run (TUI ``L`` /
+        panel ``/retro/run``).
+
+        The WHOLE block — including client construction — is advisory (``live_parallax_client`` raises
+        RuntimeError on a missing parallax entry in the MCP config source; retro must never break a build).
+        ``LLMUnavailable`` inside the drain halts it with the queue intact (the rev-0.3.57 semantics,
+        preserved by ``drain_terminal_retro``) — one stderr line for visibility, the rev-0.4.0
+        precedent.
+
+        Two bounds keep the auto path from hijacking a build (review catch — the first dispatch on a
+        never-retro'd backlog store must not block through an unbounded live-LLM drain inside the
+        dispatch call): at most ``_AUTO_RETRO_MAX`` terminals per build (the just-settled terminal
+        plus a few stragglers; a deep backlog belongs to the explicit surfaces — TUI ``L``, panel
+        ``/retro/run``, ``run_maintenance --retro-only``), and ``DEVHARNESS_RETRO_NO_LLM`` (the
+        existing run_maintenance knob) drops the auto path to the free T0-only engine — the
+        operator's kill-switch for unattended residue spend."""
+        if not self._auto_retro:
+            return
+        try:
+            engine = self._retro_engine
+            if engine is None and os.environ.get("DEVHARNESS_RETRO_NO_LLM"):
+                from devharness.retro.engine import RetroEngine
+                engine = RetroEngine(llm_fn=None)
+            result = run_retro_drain(self._conn, self._writer, retro_engine=engine,
+                                     now_millis=self._now_millis, max_retro=_AUTO_RETRO_MAX)
+            if result["halted"]:
+                sys.stderr.write(f"[console] {HALT_MESSAGE} ({result['halt_reason']})\n")
+        except Exception as exc:  # noqa: BLE001 — advisory; retro must never break a build
+            sys.stderr.write(f"[console] post-build retro skipped: {type(exc).__name__}: {exc}\n")
 
     # --- the inner accept loop (mirrors scripts/run_developer.py) ---
 
@@ -536,7 +638,7 @@ class ConsoleDeveloper:
 
     def _default_developer_kwargs(self) -> dict:
         """The live operator developer kwargs: write into ``base_path`` with advisory MCP servers
-        wired from ~/.claude.json (the ACI server is always bound in-process by the developer)."""
+        wired from the MCP config source — DEVHARNESS_MCP_CONFIG, else ~/.claude.json (the ACI server is always bound in-process by the developer)."""
         return {
             "base_path": str(self._base_path),
             "worker_test_command": self._test_command,  # worker self-tests with the verifier's command

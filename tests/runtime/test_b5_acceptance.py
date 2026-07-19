@@ -46,7 +46,9 @@ def _intake_decision(bus, decision, rejection_reason, cid):
 
 
 def _verifier_outcome(bus, task_id, passed, detail, cid):
-    bus.emit_sync("verifier_outcome", {"task_id": task_id, "verifier": "v", "passed": passed,
+    # realistic shape (rev 0.4.23): the T0 verifier_failure signatures now require the structured
+    # verifier name + the terminal's own task_id + an "<axis> axis failed" detail prefix
+    bus.emit_sync("verifier_outcome", {"task_id": task_id, "verifier": "bugfix_regression", "passed": passed,
                   "detail": detail, "evidence": {}}, correlation_id=cid)
 
 
@@ -87,7 +89,8 @@ def test_full_learning_loop_end_to_end(monkeypatch):
     _terminal(bus, "task-b", "rejected", "task-b")  # → antibody (intake_reject_injection)
 
     _budget_exceeded(bus, "oss_wall_clock", "task-c")
-    _verifier_outcome(bus, "task-c", False, "baseline check failed", "task-c")
+    _verifier_outcome(bus, "task-c", False,
+                      "baseline_should_fail axis failed: the regression test passed at baseline", "task-c")
     _terminal(bus, "task-c", "aborted", "task-c")  # → 2 gate_change (cap_exceeded + verifier_failure, the B5.7 fix)
 
     _terminal(bus, "task-d", "completed", "task-d")  # no T0 match, clean → LLM residue → antibody

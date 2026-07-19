@@ -697,3 +697,77 @@ def test_no_cors_wildcard_on_responses(tmp_path):
     finally:
         srv.shutdown()
         srv.panel.writer.close()
+
+
+def test_http_retro_run_route(tmp_path, monkeypatch):
+    """rev 0.4.23: POST /retro/run runs the §S7 explicit drain as a BuildRunner job (single-flight,
+    result via /job/{id}) through the same shared run_retro_drain the TUI `L` action uses."""
+    from devharness.panel import routes as routes_mod
+
+    monkeypatch.setattr(routes_mod, "run_retro_drain",
+                        lambda conn, bus, **kw: {"summary": "3 terminal(s) analyzed · 1 signal(s)",
+                                                 "terminals": ["a", "b", "c"], "signals": ["s1"],
+                                                 "halted": False, "halt_reason": "", "held": False})
+    srv, port = _serve(tmp_path)
+    try:
+        code, res = _post(port, "/retro/run", {})
+        assert code == 202 and res["job_id"]
+        job = None
+        for _ in range(100):
+            code, job = _get(port, f"/job/{res['job_id']}")
+            if job["status"] != "running":
+                break
+            time.sleep(0.05)
+        assert job["status"] == "done"
+        assert "3 terminal(s) analyzed" in str(job["result"])
+    finally:
+        srv.shutdown()
+        srv.panel.writer.close()
+
+
+def test_panel_html_renders_done_job_results():
+    """rev 0.4.23 review catch: a DONE job's result was silent (only errors raised the banner) — the
+    retro drain's HELD/HALTED summary vanished and a held store read as drained. The page must carry
+    the job line and render it for status 'done'."""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[2]
+            / "runtime" / "devharness" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'id="jobline"' in html
+    flat = html.replace(" ", "")
+    assert "lj.status==='done'&&lj.result" in flat  # the done-result render condition
+
+
+def test_progress_line_renders_payload_questions_readable():
+    """rev 0.4.28/0.4.29 (the charfreq drive): PAYLOAD-shaped question_text renders as the readable
+    summary — never machine JSON in the pane. The real contract (review-corrected twice): ONLY
+    payload-shaped question_text is summarized; plain-prose questions and every other value render
+    in FULL (a generic cap would truncate verifier failure detail, the operator's only diagnostics
+    surface in the pane)."""
+    import json as _json
+
+    from devharness.console import progress
+
+    raw = _json.dumps({"assumed_objective": "build a CLI", "signal_level": "high",
+                       "divergence_points": [{"question": "What counts as a word?",
+                                              "signal": "x" * 500}]})
+    line = progress.frame_line("question_asked", {"question_id": "q0", "question_text": raw})
+    assert "What counts as a word?" in line
+    assert '"divergence_points"' not in line  # the raw JSON never reaches the pane
+    # a mid-object-truncated payload must not fall through to a raw JSON slice (review catch)
+    truncated = progress.frame_line("question_asked", {"question_text": raw[: len(raw) // 2]})
+    assert '"divergence_points"' not in truncated and "unparseable" in truncated
+    # a CODE-FENCED truncated payload must be caught too (review catch: the brace heuristic missed it)
+    fenced = progress.frame_line("question_asked", {"question_text": "```json\n" + raw[: len(raw) // 2]})
+    assert '"divergence_points"' not in fenced and "unparseable" in fenced
+    # a PLAIN-PROSE question (a confirmation turn) renders FULL, never sliced (review catch)
+    prose = "Assumed objective: " + "z" * 400 + " — reply ok to confirm."
+    assert prose in progress.frame_line("question_asked", {"question_text": prose})
+    # a legitimate brace-led QUESTION extracted from a payload is not misclassified (review catch)
+    brace_q = _json.dumps({"assumed_objective": "flatten JSON", "signal_level": "high",
+                           "divergence_points": [{"question": '{"a": 1} — flatten nested objects?',
+                                                  "signal": "s"}]})
+    assert "flatten nested objects?" in progress.frame_line("question_asked", {"question_text": brace_q})
+    # verifier failure detail keeps the FULL value
+    long_detail = progress.frame_line("verifier_outcome", {"detail": "y" * 2000})
+    assert "y" * 2000 in long_detail

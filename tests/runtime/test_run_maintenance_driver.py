@@ -91,3 +91,40 @@ def test_driver_halts_retro_on_llm_unavailable_leaving_terminals_queued(capsys):
     # next window with a healthy LLM drains BOTH terminals
     summary2 = drive(conn, bus, llm_fn=lambda s, c, t: [], idle_millis=24 * 3600 * 1000, now_millis=lambda: 6)
     assert summary2["retro_processed"] == ["t-a", "t-b"]
+
+
+def test_driver_retro_only_skips_maintenance_probes_and_trust():
+    # rev 0.4.23: the backlog-drain mode runs only the learning-spine steps (retro drain + invariant
+    # sweep + signal drain) — no maintenance cycle, no adversarial/loop-fault probes, no trust/caps.
+    conn, bus, registry = _setup()
+    _terminal(bus, "t-clean", "completed")
+
+    fake_llm = lambda system, ctx, tier: []
+    summary = drive(conn, bus, llm_fn=fake_llm, idle_millis=24 * 3600 * 1000, now_millis=lambda: 5,
+                    retro_only=True)
+
+    assert summary["retro_processed"] == ["t-clean"]  # the drain ran
+    assert summary["maintenance_cycle"] is None
+    assert summary["adversarial_probe_ran"] is False
+    assert summary["loop_fault_ran"] is False
+    assert summary["trust"] is None and summary["cap_recommendations"] == []
+    assert conn.execute("SELECT count(*) FROM events WHERE event_type='maintenance_cycle_completed'").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM events WHERE event_type='adversarial_probe_run'").fetchone()[0] == 0
+
+
+def test_driver_reports_held_distinct_from_queue_empty():
+    # rev 0.4.23: a non-terminal lifecycle row holds the fermata forever (the exprlang orphan case) —
+    # the drive must report held=True so the no-op drain is visible, not silent; queue-empty stays False.
+    conn, bus, registry = _setup()
+    _terminal(bus, "t-x", "completed")
+    # an orphan 'running' lifecycle row with no terminal → FermataPacing.is_held stays True
+    bus.emit_sync("task_started", {"task_id": "t-orphan", "role": "developer", "worktree_path": "wt",
+                  "started_at_millis": 1, "correlation_id": "c2"}, correlation_id="c2")
+
+    summary = drive(conn, bus, llm_fn=None, idle_millis=0, now_millis=lambda: 5, retro_only=True)
+    assert summary["retro_processed"] == [] and summary["retro_held"] is True
+
+    # a clean store with an empty queue is NOT held
+    conn2, bus2, _ = _setup()
+    summary2 = drive(conn2, bus2, llm_fn=None, idle_millis=0, now_millis=lambda: 5, retro_only=True)
+    assert summary2["retro_processed"] == [] and summary2["retro_held"] is False

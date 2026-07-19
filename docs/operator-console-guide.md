@@ -27,9 +27,9 @@ built, verified, reviewer‑certified, and integrated through the loop. This gui
 ## Quick start — run the TUI
 
 `python -m devharness.console` launches an interactive **TUI** (Textual): a live loop‑state panel on
-top, an output log below it, and a keymap along the footer. Install the optional UI extra once
-(`pip install "devharness-runtime[tui]"`), point it at an event store with `DEVHARNESS_DB` (default
-`var/devharness.db`), and run it:
+top, an output log below it, and a keymap along the footer. Install the optional UI extra once —
+from the repo root, `pip install -e "runtime[tui]"` (the package is local‑only, not on PyPI) —
+point it at an event store with `DEVHARNESS_DB` (default `var/devharness.db`), and run it:
 
 ```bash
 # bash / zsh

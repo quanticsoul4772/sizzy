@@ -11,13 +11,12 @@ otherwise produce: a single new_project_scaffold task (specledger is greenfield)
 scoped to its own package + tests. Emit through a registry-equipped EventBus so
 plan_drafted / director_decision maintain projections (Invariant 8).
 
-The mcp-reasoning server launch spec is read live from ~/.claude.json at runtime.
+The mcp-reasoning server launch spec is read live at runtime (DEVHARNESS_MCP_CONFIG, else ~/.claude.json).
 
 Run:  python scripts/run_director.py  (a stray ANTHROPIC_API_KEY is cleared at startup)
 """
 
 import asyncio
-import json
 import os
 import sqlite3
 import sys
@@ -30,6 +29,7 @@ sys.path.insert(0, str(REPO / "runtime"))
 TARGET = Path(os.environ.get("DEVHARNESS_TARGET_REPO") or REPO)
 
 from devharness import boot  # noqa: E402
+from devharness.mcp.config import MCPConfigError, server_cfg  # noqa: E402
 from devharness.cli._bus import projected_bus  # noqa: E402
 from devharness.mcp.mcp_reasoning import MCPReasoningClient  # noqa: E402
 from devharness.migrate import migrate  # noqa: E402
@@ -54,14 +54,12 @@ TASKS = [
 
 
 def _server_config(name: str) -> dict:
-    """Read a named MCP server's live launch spec from ~/.claude.json (never embed it)."""
-    path = Path.home() / ".claude.json"
-    if not path.exists():
-        sys.exit(f"no {path} — cannot find the {name} MCP server launch spec")
-    server = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}).get(name)
-    if not server:
-        sys.exit(f"{name} not found under mcpServers in ~/.claude.json")
-    return {name: server}
+    """A named MCP server's live launch spec, wrapped (rev 0.4.25: via the single config
+    source, honoring DEVHARNESS_MCP_CONFIG with the ~/.claude.json fallback)."""
+    try:
+        return {name: server_cfg(name)}
+    except MCPConfigError as exc:
+        sys.exit(str(exc))
 
 
 def main() -> int:

@@ -32,18 +32,52 @@ _BASE64_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
 _URLENC_RE = re.compile(r"(?:%[0-9A-Fa-f]{2}){3,}")
 _HEX_RE = re.compile(r"\A[0-9a-fA-F]+\Z")  # a pure-hex run is a SHA/hash/id, not an encoded payload
 
+# Subresource-integrity hashes (rev 0.4.24): "sha512-<base64>" etc. — npm package-lock.json integrity
+# fields, CDN <script integrity=...> snippets. All three prefixes are exactly 7 chars, and each
+# algorithm's base64 body has ONE exact length (incl. padding): sha256 -> 44, sha384 -> 64, sha512 -> 88.
+_SRI_RUN_LENGTHS = {"sha256-": 44, "sha384-": 64, "sha512-": 88}
+
+
+def _is_sri_hash(m: re.Match) -> bool:
+    """True iff the matched base64 run is exactly an SRI hash body: preceded by a `shaN-` prefix AND
+    exactly that algorithm's base64 length. The `-` sits outside _BASE64_RE's char class, so the match
+    starts AFTER the prefix — hence the 7-char preceding-slice check (a fixed slice, since all three
+    prefixes are 7 chars; a lookbehind couldn't pair the run length to the algorithm). The prefix
+    compare is case-insensitive — SRI algorithm tokens are ASCII-case-insensitive per the spec, and an
+    uppercase `SHA384-` snippet would otherwise re-open the false positive (review catch)."""
+    expected = _SRI_RUN_LENGTHS.get(m.string[max(0, m.start() - 7):m.start()].lower())
+    return expected is not None and len(m.group(0)) == expected
+
 
 def _has_encoded_payload(text: str) -> bool:
-    """True if text contains a base64-ish run (excluding pure-hex SHAs/hashes/ids) or url-encoding.
+    """True if text contains a base64-ish run (excluding pure-hex SHAs/hashes/ids and exact-length
+    SRI integrity hashes) or url-encoding.
 
     A 40-char git commit SHA matches the base64-ish pattern, and the harness's OWN events are full of
     them (checkpoints, commits, ids) — so flagging pure-hex runs floods the retro antibody queue with
     false positives (every internal terminal looked 'hostile'). Only a long run that is NOT pure hex
     (real base64 has mixed case / +/= ) or a url-encoding is treated as an encoded payload.
+
+    SRI hashes (rev 0.4.24) are the base64 analog of that fix: an npm package-lock.json integrity
+    field (`"integrity": "sha512-<88-char base64>"`) quarantined a clean jsonflat retro terminal, and
+    a legitimate repo README carrying a CDN `integrity="sha384-…"` snippet was rejected at OSS intake.
+    The exclusion is tightly scoped — `shaN-` prefix AND the exact per-algorithm length — so a bare or
+    wrong-length base64 run still flags. Documented residuals, weighed deliberately: an attacker CAN
+    chain `sha512-<exactly 88 base64 chars>` chunks to carry an encoded payload past this detector —
+    but the pre-existing pure-hex exclusion above is UNBOUNDED (an arbitrary-length hex-encoded
+    payload already passes), so the length-anchored SRI carve-out adds no materially new smuggling
+    channel; this detector is a tripwire for casual encoded blobs, not a cryptographic barrier —
+    nothing downstream decodes these runs, and the instruction_override/markdown_comment detectors
+    still see plaintext. A glued prefix (`xsha512-…`) is excluded too (still an exactly-SRI-shaped
+    run). The alternative — keeping the flag on SRI runs — was a live false-reject of legitimate
+    repos at the fail-closed intake gate and of clean terminals at retro quarantine.
     """
     for m in _BASE64_RE.finditer(text):
-        if not _HEX_RE.match(m.group(0)):
-            return True
+        if _HEX_RE.match(m.group(0)):
+            continue
+        if _is_sri_hash(m):
+            continue
+        return True
     return bool(_URLENC_RE.search(text))
 
 

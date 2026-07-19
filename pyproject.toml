@@ -1,11 +1,15 @@
+# NOTE: this file packages the bundled *jqlite* sub-project (a harness-built demo CLI),
+# NOT the devharness harness. The harness is:  pip install -e ./runtime
+# (rev 0.4.25: the dist is named devharness-jqlite so an accidental root `pip install .`
+# at least self-describes in `pip list`; the `jqlite` command and module are unchanged.)
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jqlite"
+name = "devharness-jqlite"
 version = "0.1.0"
-description = "A dependency-free, stdlib-only jq-style JSON query CLI."
+description = "A dependency-free, stdlib-only jq-style JSON query CLI (a devharness-built demo project)."
 readme = "jqlite/README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -14,7 +18,7 @@ dependencies = []
 # Optional extras. jqlite's core stays dependency-free; the ``color`` extra adds
 # rich solely to power the optional ``--color`` syntax-highlighting flag, which
 # degrades cleanly to plain output when rich is not installed.
-# Install with: pip install "jqlite[color]"  (pinned set in requirements-color.lock)
+# Install with: pip install "devharness-jqlite[color]"  (pinned set in requirements-color.lock)
 [project.optional-dependencies]
 color = ["rich==13.9.4"]
 

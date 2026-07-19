@@ -41,7 +41,7 @@ from textual.widgets import Footer, Header, Input, Label, RichLog, Static
 from textual.worker import get_current_worker
 
 from devharness.console.app import ConsoleApp
-from devharness.console.developer import ConsoleDeveloper, live_parallax_client
+from devharness.console.developer import ConsoleDeveloper, live_parallax_client, run_retro_drain
 from devharness.console.director import ConsoleDirector
 from devharness.console.oss import ConsoleOss
 from devharness.console.progress import PROGRESS_EVENTS, frame_line
@@ -197,6 +197,7 @@ class ConsoleTUI(App):
         ("C", "certify", "certify"),
         ("M", "assemble", "assemble"),
         ("O", "oss_run", "oss"),
+        ("L", "retro_run", "retro run"),
         ("T", "set_target", "set target"),
         ("P", "switch_project", "switch project"),
         ("N", "new_project", "new project"),
@@ -791,7 +792,8 @@ class ConsoleTUI(App):
 
     def _developer_surface(self, conn, bus):
         """ConsoleDeveloper scoped to the operator's set build target (base_path + test command), if any."""
-        kwargs = {}
+        # auto_retro: every operator-driven build feeds the §S7 spine post-build (rev 0.4.23)
+        kwargs = {"auto_retro": True}
         if self._target_path is not None:
             kwargs["base_path"] = self._target_path
         if self._test_command is not None:
@@ -1039,6 +1041,13 @@ class ConsoleTUI(App):
     def action_oss_run(self) -> None:
         self._prompt("OSS run — correlation_id:", lambda v: self._launch(
             "oss run", lambda conn, bus: ConsoleOss(conn, bus).run(v)))
+
+    def action_retro_run(self) -> None:
+        # §S7 explicit retro drain (rev 0.4.23): T0 + T1 LLM residue over every unprocessed terminal +
+        # signal in THIS store. The post-build auto-drain covers normal flow; this is the backlog /
+        # parked-store trigger. Errors surface via the worker's ✖ line; a fermata-held store reports
+        # HELD (distinct from queue-empty) so a permanently-held store is visible, not silent.
+        self._launch("retro run", lambda conn, bus: run_retro_drain(conn, bus)["summary"])
 
     def action_assemble(self) -> None:
         # assemble is a fast git merge (not a minutes-long worker) — run it on the UI thread via _act,

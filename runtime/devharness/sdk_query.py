@@ -18,32 +18,21 @@ re-raises unchanged, and the auth-switch is surfaced with a stderr line + the ex
 """
 
 import dataclasses
-import json
 import sys
-from pathlib import Path
 
 from claude_agent_sdk import AssistantMessage, RateLimitEvent, ToolUseBlock
 
 
 def overage_key() -> str | None:
-    """The API key to use for pay-as-you-go overage, sourced EXACTLY as the harness already sources the
-    mcp-reasoning launch spec (``console/director.py:_reasoning_server_config``): the **top-level**
-    ``~/.claude.json`` ``mcpServers["mcp-reasoning"]["env"]["ANTHROPIC_API_KEY"]``, falling back to
-    ``["parallax"]``. Returns None if neither is present.
+    """The API key to use for pay-as-you-go overage. rev 0.4.25: the body lives in
+    ``devharness.mcp.config.overage_api_key`` (the single MCP-config source, honoring
+    ``DEVHARNESS_MCP_CONFIG``); the rev-0.4.0 semantics are preserved there — a top-level lookup of
+    exactly ``("mcp-reasoning", "parallax")`` in order, never a scan, absent → None. This NAME
+    survives as a thin delegate because it is the test seam (``test_sdk_query``'s autouse fixture
+    monkeypatches ``sdk_query.overage_key``)."""
+    from devharness.mcp.config import overage_api_key
 
-    Deliberately NOT a scan of all servers: the file also holds duplicate ``mcp-reasoning``/``parallax``
-    blocks under ``projects.<path>.mcpServers`` with DIFFERENT keys; the top-level block is the one the
-    harness already launches mcp-reasoning from, so it is the deterministic, consistent source.
-    """
-    path = Path.home() / ".claude.json"
-    if not path.exists():
-        return None
-    servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {})
-    for name in ("mcp-reasoning", "parallax"):
-        key = (servers.get(name, {}).get("env") or {}).get("ANTHROPIC_API_KEY")
-        if key:
-            return key
-    return None
+    return overage_api_key()
 
 
 def _is_credit_rejection(message) -> bool:

@@ -45,6 +45,7 @@ TARGET = Path(os.environ.get("DEVHARNESS_TARGET_REPO") or REPO)
 import msgspec  # noqa: E402
 
 from devharness import boot  # noqa: E402
+from devharness.mcp.config import MCPConfigError, server_cfg  # noqa: E402
 from devharness.artifacts.plan import PlanArtifact  # noqa: E402
 from devharness.events.registry import TerminalOutcome  # noqa: E402
 from devharness.health import emit_snapshot, leak_warning  # noqa: E402
@@ -97,12 +98,12 @@ TEST_COMMAND = shlex.split(_TEST_OVERRIDE) if _TEST_OVERRIDE else (
 
 
 def _server_cfg(name: str) -> dict:
-    """A named MCP server's live launch spec from ~/.claude.json (never embedded)."""
-    path = Path.home() / ".claude.json"
-    server = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}).get(name)
-    if not server:
-        sys.exit(f"{name} not found under mcpServers in ~/.claude.json")
-    return server
+    """A named MCP server's live launch spec (rev 0.4.25: via the single config source,
+    honoring DEVHARNESS_MCP_CONFIG with the ~/.claude.json fallback; never embedded)."""
+    try:
+        return server_cfg(name)
+    except MCPConfigError as exc:
+        sys.exit(str(exc))
 
 
 def _stub_reasoning() -> MCPReasoningClient:

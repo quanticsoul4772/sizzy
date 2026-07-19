@@ -237,3 +237,60 @@ def test_confirmation_turn_survives_an_answer_echo():
     types = [r[0] for r in conn.execute("SELECT event_type FROM events ORDER BY seq")]
     assert types.count("question_asked") == 2  # round 1 AND the confirmation turn both asked
     assert "spec_drafted" in types
+
+
+def test_resolved_round_block_names_every_point():
+    # rev 0.4.28 (the charfreq drive): the context threaded only the FIRST divergence point per
+    # round, so a later elicit legitimately re-asked a settled later point — every point must be
+    # enumerated as RESOLVED, with the answer once per round
+    import json as _json
+
+    from devharness.roles.research import resolved_round_block
+
+    q = _json.dumps({"assumed_objective": "build a CLI", "signal_level": "high",
+                     "divergence_points": [
+                         {"question": "What counts as a word?", "signal": "tokenizer"},
+                         {"question": "What output format?", "signal": "contract"},
+                         {"question": "How is non-UTF-8 handled?", "signal": "exit codes"}]})
+    block = resolved_round_block(q, "1. lowercase 2. table 3. exit 4")
+    # ASKED, not RESOLVED (review catch): one answer may not address every point of a round —
+    # declaring unaddressed points settled would make them permanently un-askable
+    assert "ASKED" in block and "do not re-ask anything this answer already settles" in block
+    for point in ("What counts as a word?", "What output format?", "How is non-UTF-8 handled?"):
+        assert point in block  # ALL points named, not just the first
+    assert block.count("ANSWER:") == 1
+
+
+def test_resolved_round_block_falls_back_on_unparseable_text():
+    from devharness.roles.research import resolved_round_block
+
+    block = resolved_round_block("not json at all", "an answer")
+    assert block.startswith("Q: ") and "an answer" in block  # the prior one-point behavior
+
+
+def test_resolved_round_block_answer_survives_multipoint_length():
+    # rev 0.4.29 review: a 300-char ANSWER cap truncated the very answers that settle later points,
+    # re-introducing the re-ask defect for verbose multi-point answers (the charfreq round-2 answer
+    # exceeded 300 chars) — the cap must comfortably hold a point-by-point answer
+    import json as _json
+
+    from devharness.roles.research import resolved_round_block
+
+    q = _json.dumps({"assumed_objective": "x", "signal_level": "high",
+                     "divergence_points": [{"question": "a?"}, {"question": "b?"}, {"question": "c?"}]})
+    answer = "1. " + "alpha " * 20 + "2. " + "beta " * 20 + "3. non-UTF-8 fails with exit 4 " + "gamma " * 20
+    assert len(answer) > 300
+    block = resolved_round_block(q, answer)
+    assert "non-UTF-8 fails with exit 4" in block  # the later points' answers are IN the context
+
+
+def test_resolved_round_block_caps_point_count():
+    # server-controlled payloads must not balloon the context (the rev-0.3.78 class)
+    import json as _json
+
+    from devharness.roles.research import resolved_round_block
+
+    q = _json.dumps({"assumed_objective": "x", "signal_level": "high",
+                     "divergence_points": [{"question": f"point {i}?"} for i in range(20)]})
+    block = resolved_round_block(q, "yes")
+    assert block.count("- point") == 6  # _RESOLVED_MAX_POINTS

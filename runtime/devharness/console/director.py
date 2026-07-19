@@ -18,11 +18,10 @@ directly. Spec resolution is SELECT-only.
 """
 
 import asyncio
-import json
 import time
-from pathlib import Path
 
 from devharness.mcp.base import TRANSIENT_SDK_RESULT
+from devharness.mcp.config import server_cfg
 from devharness.mcp.mcp_reasoning import MCPReasoningClient
 from devharness.roles.director import DirectorRole
 
@@ -34,22 +33,17 @@ class NoSignedSpec(RuntimeError):
 
 
 def _reasoning_server_config(name: str = "mcp-reasoning") -> dict:
-    """Read a named MCP server's live launch spec from ~/.claude.json (never embed it).
+    """A named MCP server's live launch spec, wrapped ``{name: cfg}`` (the client mapping form).
 
-    Mirrors ``run_director``'s ``_server_config``: the launch spec is operator-local and
-    machine-specific, so it is read live, never committed.
+    rev 0.4.25: delegates to ``devharness.mcp.config.server_cfg`` — the single config source,
+    honoring ``DEVHARNESS_MCP_CONFIG`` with the ``~/.claude.json`` fallback; ``MCPConfigError``
+    IS a ``RuntimeError``, so existing surfaces hold.
     """
-    path = Path.home() / ".claude.json"
-    if not path.exists():
-        raise RuntimeError(f"no {path} — cannot find the {name} MCP server launch spec")
-    server = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}).get(name)
-    if not server:
-        raise RuntimeError(f"{name} not found under mcpServers in ~/.claude.json")
-    return {name: server}
+    return {name: server_cfg(name)}
 
 
 def live_reasoning_client() -> MCPReasoningClient:
-    """The live mcp-reasoning client, built from ~/.claude.json (as ``run_director`` builds it)."""
+    """The live mcp-reasoning client, built from the MCP config source — DEVHARNESS_MCP_CONFIG, else ~/.claude.json (as ``run_director`` builds it)."""
     return MCPReasoningClient(mcp_servers=_reasoning_server_config())
 
 

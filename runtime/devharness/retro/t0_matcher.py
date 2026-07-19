@@ -69,16 +69,38 @@ def _intake_rejected(ctx: RetroContext, rejection_reason: str) -> list:
     return ids
 
 
-def _verifier_failed(ctx: RetroContext, reason_substr: str) -> list:
+def _verifier_failed(ctx: RetroContext, expected_verifier: str, axis_prefixes: tuple) -> list:
+    # A COMPLETED terminal never fires these signatures (review catch, rev 0.4.23): retro dedup is
+    # keyed on (task_id, terminal_kind), so a re-driven task's completed terminal is re-analyzed with
+    # the first attempt's failed verifier_outcome still in preceding_events AND a matching task_id —
+    # the task-scoping gate alone re-fires a duplicate candidate wrongly attributed to the success.
+    # And an intra-attempt corrected failure (verifier fail → auto-retry → pass → completed) is the
+    # loop working as designed — the operator rejected exactly that candidate on the wordstat retro.
+    if (ctx.terminal_outcome_event or {}).get("outcome") == "completed":
+        return []
     ids = []
     for ev in ctx.preceding_events:
         if ev.get("event_type") != "verifier_outcome":
             continue
         p = ev.get("payload", {})
-        # B5.7 acceptance fix: match the real VerifierOutcome shape (passed: bool, detail: str). The
-        # original predicate read outcome/reason — fields VerifierOutcome never carries — so these three
-        # verifier_failure signatures were dead against real events (never covered by a B5.1 test).
-        if p.get("passed") is False and reason_substr in (p.get("detail") or ""):
+        # rev 0.4.23: match STRUCTURE, not prose. The prior predicate substring-scanned `detail` for a
+        # bare token ("baseline"/"post"/"behavior") — but the failing verifier's test-OUTPUT TAIL is
+        # appended to `detail`, so a pytest-asyncio warning ("…avoid unexpected behavior…") fired
+        # verifier_failure_behavior_change on dependency_resolves/feature failures (verlite + wordstat:
+        # 4 operator-rejected candidates, 0 accepted). Three structured checks instead:
+        #   1. the `verifier` field names the class verifier the signature is about;
+        #   2. the outcome belongs to the terminal's OWN task — a plan's tasks share one correlation_id,
+        #      so an earlier task's failure sits in every later terminal's preceding_events and would
+        #      re-fire as a duplicate, wrongly-attributed candidate (the engine has no terminal-path
+        #      dedup — same hazard class as the signal-only gate below);
+        #   3. `detail` STARTS WITH a real "<axis> axis failed" reason prefix (verifier/builtin emits
+        #      exactly that shape) — the output tail comes after the prefix and can never match.
+        if p.get("verifier") != expected_verifier or p.get("passed") is not False:
+            continue
+        if p.get("task_id") != ctx.source_task_id:
+            continue
+        detail = p.get("detail") or ""
+        if any(detail.startswith(f"{axis} axis failed") for axis in axis_prefixes):
             ids.append(ev.get("event_id", ""))
     return ids
 
@@ -124,11 +146,22 @@ def _register_builtin_signatures() -> None:
         register_signature(SignatureSpec(signature_name=name, match_predicate_ref=name,
                                          candidate_kind="antibody_candidate", candidate_payload_template={"pattern_text": text}))
 
-    # verifier failures -> gate_change (propose tightening the verifier's expectation)
+    # verifier failures -> gate_change (propose tightening the verifier's expectation). Each signature
+    # binds to the class verifier that emits its axis (rev 0.4.23): baseline/post are the bugfix
+    # verifier's axes; behavior_change binds to the refactor verifier's four diff-transition axes (the
+    # axes it ACTUALLY emits — the old "behavior" token never appears in a genuine refactor failure,
+    # whose empty-capture message spells "behaviour"). suite_passes/test_suite and non-axis reasons
+    # ("regression_command missing", "class fields missing", empty-capture) stay deliberately
+    # unsignatured: a plain red suite is the ordinary verifier signal, not a gate-tightening pattern.
     verifier_failures = [
-        ("verifier_failure_baseline_fail", lambda c: _verifier_failed(c, "baseline"), "baseline_should_fail"),
-        ("verifier_failure_post_pass", lambda c: _verifier_failed(c, "post"), "post_should_pass"),
-        ("verifier_failure_behavior_change", lambda c: _verifier_failed(c, "behavior"), "behavior_preserving"),
+        ("verifier_failure_baseline_fail",
+         lambda c: _verifier_failed(c, "bugfix_regression", ("baseline_should_fail",)), "baseline_should_fail"),
+        ("verifier_failure_post_pass",
+         lambda c: _verifier_failed(c, "bugfix_regression", ("post_should_pass",)), "post_should_pass"),
+        ("verifier_failure_behavior_change",
+         lambda c: _verifier_failed(c, "refactor_behavior_preserving",
+                                    ("test_added", "test_removed", "pass_to_fail", "fail_to_pass")),
+         "behavior_preserving"),
     ]
     for name, pred, axis in verifier_failures:
         register_predicate(name, pred)

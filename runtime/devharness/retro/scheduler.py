@@ -101,8 +101,9 @@ class RetroScheduler:
 
         at = (now_millis or (lambda: int(time.time() * 1000)))()
         if self.engine is not None:
-            # the engine emits the CANDIDATE events itself; the scheduler folds its run shape into retro_run
-            result = self.engine.analyze(ctx, event_bus, now_millis=lambda: at)
+            # the engine emits the CANDIDATE events itself; the scheduler folds its run shape into
+            # retro_run. conn threads the rev-0.4.24 duplicate-candidate guard (pre-emit queue dedup).
+            result = self.engine.analyze(ctx, event_bus, now_millis=lambda: at, conn=conn)
         else:
             result = RetroResult(candidates_emitted=[], summary="b5.0_stub")  # B5.0: no engine wired
         event_bus.emit_sync(
@@ -112,6 +113,7 @@ class RetroScheduler:
                 terminal_kind=terminal_payload["outcome"], t0_matched_signatures=list(result.t0_matched_signatures),
                 llm_invoked=result.llm_invoked, candidates_emitted_count=len(result.candidates_emitted),
                 candidate_kinds=list(result.candidate_kinds), retro_run_at_millis=at, correlation_id=correlation_id,
+                candidates_suppressed_count=result.candidates_suppressed_count,
             )),
             correlation_id=correlation_id,
         )

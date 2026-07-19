@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO / "runtime"))
 import msgspec  # noqa: E402
 
 from devharness import boot  # noqa: E402
+from devharness.mcp.config import MCPConfigError, server_cfg  # noqa: E402
 from devharness.artifacts.plan import OssEnvelope, PlanArtifact  # noqa: E402
 from devharness.cli._bus import projected_bus  # noqa: E402
 from devharness.console.developer import emit_client_costs  # noqa: E402
@@ -146,10 +147,11 @@ async def drive_oss(director, *, signed_spec_id, envelope, description, tasks, m
 
 
 def _server_cfg(name: str) -> dict:
-    server = json.loads((Path.home() / ".claude.json").read_text(encoding="utf-8")).get("mcpServers", {}).get(name)
-    if not server:
-        sys.exit(f"{name} not found under mcpServers in ~/.claude.json")
-    return server
+    """rev 0.4.25: via the single config source (DEVHARNESS_MCP_CONFIG, else ~/.claude.json)."""
+    try:
+        return server_cfg(name)
+    except MCPConfigError as exc:
+        sys.exit(str(exc))
 
 
 def _stub_reasoning() -> MCPReasoningClient:

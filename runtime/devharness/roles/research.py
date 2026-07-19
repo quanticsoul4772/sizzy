@@ -30,6 +30,7 @@ from devharness.mcp.mcp_reasoning import MCP_REASONING_TOOLS
 from devharness.mcp.parallax import PARALLAX_TOOLS
 from devharness.roles.base import AgentRole
 from devharness.roles.synthesis import parse_spec_body, synthesis_prompt
+from devharness.textsim import word_shingles
 
 
 def repo_structural_summary(artifact) -> str:
@@ -82,6 +83,43 @@ _REASK_JACCARD = 0.5
 # add no scope note; anything else is captured as design intent for synthesis.
 _CONFIRM_ACKS = frozenset({"ok", "okay", "yes", "y", "confirm", "confirmed", "good", "looks good",
                            "lgtm", "fine", "proceed", "go", "sounds good", "correct"})
+
+
+# resolved_round_block bounds (rev 0.4.29 review): the ANSWER cap must comfortably hold a
+# multi-point operator answer — a 300-char cap truncated the very answers that settle later points,
+# re-introducing the re-ask defect for verbose answers (the charfreq round-2 answer exceeded 300).
+# Points are capped in NUMBER too (the payload is server-controlled; unbounded enumeration would
+# regrow the context-balloon class rev 0.3.78 bounded).
+_RESOLVED_POINT_CAP = 300     # chars per enumerated question
+_RESOLVED_ANSWER_CAP = 1000   # chars per round's answer
+_RESOLVED_MAX_POINTS = 6      # points enumerated per round
+
+
+def resolved_round_block(question_text: str, answer: str) -> str:
+    """One interview round rendered as an explicit ASKED/ANSWER block for elicit's context threading.
+
+    rev 0.4.28 (the charfreq drive's finding): the context previously threaded each round as
+    ``readable_question_text`` — the FIRST divergence point only — so a multi-point round's later
+    points were never named, and the next elicit round legitimately re-asked one (the judge cannot
+    honor "never re-ask" for a point the context never told it was asked). Every point's question is
+    enumerated, with the operator's answer once per round. Two review-shaped choices: the block says
+    ASKED, not RESOLVED — one answer may not address every point of a round, and declaring
+    unaddressed points settled would make them permanently un-askable (the judge decides coverage
+    from the answer text; a genuine gap may still get a sharper follow-up); and each point carries
+    up to 300 chars (a 150-char cut left long questions' substance out of the block, so a rephrase
+    of the cut tail could not be matched to the entry). Parse failure falls back to the one-point
+    summary (the prior behavior; ``_elicit_payload`` is the single payload parser)."""
+    payload = ResearchRole._elicit_payload(question_text)
+    points = [str(d["question"])[:_RESOLVED_POINT_CAP]
+              for d in ((payload or {}).get("divergence_points") or [])[:_RESOLVED_MAX_POINTS]
+              if isinstance(d, dict) and d.get("question")]
+    if not points:
+        return f"Q: {readable_question_text(question_text)} A: {answer[:_RESOLVED_ANSWER_CAP]}"
+    lines = ["ASKED (the operator's answer follows — do not re-ask anything this answer already "
+             "settles, in any wording or paraphrase):"]
+    lines += [f"- {p}" for p in points]
+    lines.append(f"ANSWER: {answer[:_RESOLVED_ANSWER_CAP]}")
+    return "\n".join(lines)
 
 
 def readable_question_text(question_text: str, *, max_len: int = 200) -> str:
@@ -324,7 +362,9 @@ class ResearchRole(AgentRole):
             # Preserve the operator's answer in full; only the (large, JSON) question
             # blob is bounded, so a long elicit payload can never truncate the answer.
             self._flag_assumption(research_id, correlation_id, text=f"{question_text[:100]} -> {answer}", confidence=0.6, low_confidence_flag=True)
-            qa_history.append(f"Q: {readable_question_text(question_text)} A: {answer[:300]}")
+            # rev 0.4.28: thread EVERY divergence point as resolved, not just the first — a later
+            # round re-asked a settled point the one-point summary had silently dropped (charfreq)
+            qa_history.append(resolved_round_block(question_text, answer))
             answered_tokens.append(self._salient_tokens(question_text))
             answered_answers.append(answer)
             asked += 1
@@ -497,14 +537,12 @@ class ResearchRole(AgentRole):
             except (ValueError, TypeError):
                 pass
 
-        def shingles(source: str) -> set:
-            words = re.findall(r"[a-z0-9/=.\-]+", source.lower())
-            return {" ".join(words[k:k + n]) for k in range(len(words) - n + 1)}
-
-        new = shingles(text)
+        # rev 0.4.24: the shingle math lives in textsim.word_shingles (extracted verbatim so the §S7
+        # duplicate-candidate guard shares it); behavior here is unchanged.
+        new = word_shingles(text, n)
         if not new:
             return False
-        return any(new & shingles(str(a)) for a in prior_answers)
+        return any(new & word_shingles(str(a), n) for a in prior_answers)
 
     @staticmethod
     def _governing_preferences(question_text: str) -> list[str]:
