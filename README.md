@@ -1,9 +1,8 @@
-# devharness
+# sizzy
 
 A phased agent harness for collaborative software development - verifier-first acceptance, a single-writer lock, an OSS-contribution envelope, and a learning spine, all under operator-in-the-loop discipline.
 
-devharness is not a general agent framework. It is a specific harness: four roles with structurally-enforced tool boundaries drive an event-sourced loop - research → spec → plan → write → verify → review → integrate - where every consequential step is earned, not asserted. A task is `completed` only when a declared verifier passes **and** a fresh-context reviewer certifies it (two separate checks). Gates fail closed. Retro proposals never auto-apply; an operator approves or rejects each one. Core safety gates cannot be weakened by the learning loop. These are invariants with tests, not prompt requests.
-
+sizzy is not a general agent framework. It is a specific harness: four roles with structurally-enforced tool boundaries drive an event-sourced loop - research → spec → plan → write → verify → review → integrate - where every consequential step is earned, not asserted. A task is `completed` only when a declared verifier passes **and** a fresh-context reviewer certifies it (two separate checks). Gates fail closed. Retro proposals never auto-apply; an operator approves or rejects each one. Core safety gates cannot be weakened by the learning loop. These are invariants with tests, not prompt requests.
 
 The harness also carries a **learning spine**: every terminal outcome feeds a retro auditor that proposes improvements (antibodies, gate changes) as CANDIDATEs into operator-review queues, plus federated cross-project memory under verified-before-trusted promotion.
 
