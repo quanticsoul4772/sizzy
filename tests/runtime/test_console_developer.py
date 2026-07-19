@@ -555,3 +555,184 @@ def test_console_and_script_share_the_scratch_commit_subject():
                    / "developer.py").read_text(encoding="utf-8")
     assert "scratch_commit_subject(planned_task)" in console_src
     assert 'f"devharness feature' not in console_src
+
+
+# --- §S7 post-build auto-retro (rev 0.4.23) ---
+
+def _auto_retro_dispatch(app, repo, *, retro_engine):
+    """Dispatch one completing feature with the production auto_retro posture + an injected engine."""
+
+    def write_hook(editor, shell, test_runner):
+        editor.write_file("app.py", "def foo():\n    return 42\n", predicted_success=0.9)
+        editor.write_file("tests/test_app.py", "def test_foo():\n    assert True\n", predicted_success=0.9)
+
+    return app.developer(base_path=str(repo), test_command=_TEST_CMD,
+                         auto_retro=True, retro_engine=retro_engine).dispatch(
+        CID, parallax=_FakeParallax(),
+        developer_kwargs={"base_path": str(repo), "base_ref": "feature-base",
+                          "query_fn": _noop_query(), "write_hook": write_hook},
+        snapshot=False, spec_claim_retries=0)
+
+
+def test_dispatch_auto_retro_drains_terminal_into_spine(tmp_path):
+    # rev 0.4.23: a production-surface dispatch (auto_retro=True — the TUI/panel construction posture)
+    # drains the learning spine right after the build settles: the terminal gets a retro_run in the
+    # SAME store, no separate run_maintenance invocation. The engine is injected (T0-only) — the live
+    # path builds the T1 residue engine inside the advisory guard.
+    from devharness.retro.engine import RetroEngine
+
+    app = _app()
+    _seed_spec(app.conn)
+    _draft_plan(app, [_feature_task()])
+    repo = _existing_repo(tmp_path)
+
+    terminal = _auto_retro_dispatch(app, repo, retro_engine=RetroEngine(llm_fn=None))
+    assert terminal.outcome == "completed"
+    runs = _events(app.conn, "retro_run")
+    assert [r["source_task_id"] for r in runs] == [terminal.task_id]
+
+
+def test_dispatch_auto_retro_llm_down_leaves_queue_intact(tmp_path):
+    # rev 0.3.57 semantics preserved on the auto path: a down residue LLM halts the drain — the build
+    # itself is unaffected (advisory) and NO retro_run is recorded, so the terminal stays queued for
+    # the next build / an explicit retro run instead of being consumed as "analyzed, nothing found".
+    from devharness.retro.engine import RetroEngine
+    from devharness.retro.llm_client import LLMUnavailable
+
+    def down(system, ctx, tier):
+        raise LLMUnavailable("transport down")
+
+    app = _app()
+    _seed_spec(app.conn)
+    _draft_plan(app, [_feature_task()])
+    repo = _existing_repo(tmp_path)
+
+    terminal = _auto_retro_dispatch(app, repo, retro_engine=RetroEngine(llm_fn=down))
+    assert terminal.outcome == "completed"        # retro must never break a build
+    assert _events(app.conn, "retro_run") == []   # the terminal stays queued
+
+
+def test_dispatch_default_posture_no_auto_retro(tmp_path):
+    # auto_retro defaults OFF at the class (the direct-construction/test posture) — only the
+    # production surfaces (TUI _developer_surface / panel /dispatch) construct with auto_retro=True.
+    app = _app()
+    _seed_spec(app.conn)
+    _draft_plan(app, [_feature_task()])
+    repo = _existing_repo(tmp_path)
+
+    def write_hook(editor, shell, test_runner):
+        editor.write_file("app.py", "def foo():\n    return 42\n", predicted_success=0.9)
+        editor.write_file("tests/test_app.py", "def test_foo():\n    assert True\n", predicted_success=0.9)
+
+    terminal = _dispatch(app, repo, write_hook=write_hook)
+    assert terminal.outcome == "completed"
+    assert _events(app.conn, "retro_run") == []
+
+
+def test_run_retro_drain_summary_and_held_reporting():
+    # rev 0.4.23: the shared drain reports HELD (fermata: e.g. an orphan running lifecycle row)
+    # distinctly from queue-empty, so a permanently-held store is visible, not silent.
+    from devharness.console.developer import run_retro_drain
+    from devharness.retro.engine import RetroEngine
+
+    app = _app()
+    app.writer.emit_sync("terminal_outcome", {"task_id": "t-done", "outcome": "completed", "detail": "",
+                         "reason": "", "correlation_id": "c1", "terminated_at_millis": 1},
+                         correlation_id="c1")
+    r = run_retro_drain(app.conn, app.writer, retro_engine=RetroEngine(llm_fn=None))
+    assert r["terminals"] == ["t-done"] and r["held"] is False
+    assert r["summary"] == "1 terminal(s) analyzed · 0 signal(s)"
+
+    # an orphan 'running' lifecycle row (started, no terminal) holds the fermata -> HELD, queue intact
+    app.writer.emit_sync("terminal_outcome", {"task_id": "t-late", "outcome": "rejected", "detail": "",
+                         "reason": "", "correlation_id": "c2", "terminated_at_millis": 2},
+                         correlation_id="c2")
+    app.writer.emit_sync("task_started", {"task_id": "t-orphan", "role": "developer",
+                         "worktree_path": "wt", "started_at_millis": 3, "correlation_id": "c3"},
+                         correlation_id="c3")
+    r2 = run_retro_drain(app.conn, app.writer, retro_engine=RetroEngine(llm_fn=None))
+    assert r2["held"] is True and r2["terminals"] == []
+    assert "HELD" in r2["summary"]
+
+
+def test_run_retro_drain_emits_cost_even_when_drain_raises(monkeypatch):
+    # review catch (rev 0.4.23): a mid-drain exception AFTER real T1 spend must not lose the realized
+    # cost from the SC-6 ledger — the analyzed terminals' retro_runs exist, so they are never
+    # re-analyzed/re-billed and the spend would be unrecoverable. The emission sits in a finally.
+    import devharness.retro.llm_client as llm_mod
+    from devharness.console import developer as dev_mod
+    from devharness.console.developer import run_retro_drain
+
+    class _SpentClient:
+        total_cost_usd = 0.33
+        model = "claude-sonnet-5"
+
+    def _boom_llm_fn(client):
+        def llm(system, ctx, tier):
+            raise RuntimeError("mid-analysis crash, NOT LLMUnavailable")
+        return llm
+
+    monkeypatch.setattr(dev_mod, "live_parallax_client", lambda model=None: _SpentClient())
+    monkeypatch.setattr(llm_mod, "make_llm_fn", _boom_llm_fn)
+
+    app = _app()
+    app.writer.emit_sync("terminal_outcome", {"task_id": "t-clean", "outcome": "completed", "detail": "",
+                         "reason": "", "correlation_id": "c1", "terminated_at_millis": 1},
+                         correlation_id="c1")
+    with pytest.raises(RuntimeError):
+        run_retro_drain(app.conn, app.writer)  # live path -> clean residue -> boom
+    costs = _events(app.conn, "cost_spent")
+    assert [c["role"] for c in costs] == ["retro_residue"]
+    assert costs[0]["amount_usd"] == 0.33 and costs[0]["correlation_id"] == "maintenance"
+
+
+def test_run_retro_drain_max_retro_bounds_the_pass():
+    # review catch (rev 0.4.23): the post-build auto-drain is BOUNDED (_AUTO_RETRO_MAX) so a first
+    # dispatch on a backlog store can't block through the whole backlog inline; the remainder stays
+    # queued for the explicit surfaces.
+    from devharness.console.developer import run_retro_drain
+    from devharness.retro.engine import RetroEngine
+
+    app = _app()
+    for n in (1, 2, 3):
+        app.writer.emit_sync("terminal_outcome", {"task_id": f"t-{n}", "outcome": "completed",
+                             "detail": "", "reason": "", "correlation_id": f"c{n}",
+                             "terminated_at_millis": n}, correlation_id=f"c{n}")
+    r = run_retro_drain(app.conn, app.writer, retro_engine=RetroEngine(llm_fn=None), max_retro=2)
+    assert r["terminals"] == ["t-1", "t-2"]  # bounded; t-3 stays queued
+    r2 = run_retro_drain(app.conn, app.writer, retro_engine=RetroEngine(llm_fn=None), max_retro=2)
+    assert r2["terminals"] == ["t-3"]
+
+
+def test_auto_retro_honors_no_llm_env(monkeypatch, tmp_path):
+    # review catch (rev 0.4.23): DEVHARNESS_RETRO_NO_LLM is the operator's kill-switch for unattended
+    # residue spend — the auto path must drop to the free T0-only engine, never build the live client.
+    from devharness.console import developer as dev_mod
+
+    def _never(model=None):
+        raise AssertionError("live client must not be built under DEVHARNESS_RETRO_NO_LLM")
+
+    monkeypatch.setattr(dev_mod, "live_parallax_client", _never)
+    monkeypatch.setenv("DEVHARNESS_RETRO_NO_LLM", "1")
+
+    app = _app()
+    _seed_spec(app.conn)
+    _draft_plan(app, [_feature_task()])
+    repo = _existing_repo(tmp_path)
+
+    def write_hook(editor, shell, test_runner):
+        editor.write_file("app.py", "def foo():\n    return 42\n", predicted_success=0.9)
+        editor.write_file("tests/test_app.py", "def test_foo():\n    assert True\n", predicted_success=0.9)
+
+    terminal = app.developer(base_path=str(repo), test_command=_TEST_CMD, auto_retro=True).dispatch(
+        CID, parallax=_FakeParallax(),
+        developer_kwargs={"base_path": str(repo), "base_ref": "feature-base",
+                          "query_fn": _noop_query(), "write_hook": write_hook},
+        snapshot=False, spec_claim_retries=0)
+    assert terminal.outcome == "completed"
+    # the drain still ran (llm_fn=None -> the residue layer yields nothing) and the monkeypatched
+    # live_parallax_client proves the live T1 client was never built (it raises if called)
+    runs = _events(app.conn, "retro_run")
+    assert [r["source_task_id"] for r in runs] == [terminal.task_id]
+    assert _events(app.conn, "cost_spent") == [] or all(
+        c["role"] != "retro_residue" for c in _events(app.conn, "cost_spent"))  # no residue spend

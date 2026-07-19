@@ -45,7 +45,7 @@ def main(argv=None) -> int:
     except ImportError:
         sys.stderr.write(
             "textual is not installed; showing the read-only snapshot. "
-            "Install the TUI with:  pip install 'devharness-runtime[tui]'\n"
+            "Install the TUI from the repo root with:  pip install -e 'runtime[tui]'\n"
         )
         return _status(argv)
     return run_tui()

@@ -20,6 +20,14 @@ import re
 # like "supported" (a legit diff/feature may contain those — a false flag here would block legitimate work).
 _INJECTION_MARKERS = (
     "verdict: supported", "verdict:supported", "verdict: not supported", "verdict is supported",
+    # NOTE (rev 0.4.26): adding the asterisked rendered forms ("verdict: **supported**") was
+    # attempted and REVERTED — the harness builds itself, and that literal string legitimately
+    # appears in 7+ of its own test fixtures, hermetic.py, this docstring's sibling, and the docs;
+    # the marker would terminally false-reject any self-build diff touching them (the git-SHA /
+    # SRI-hash false-positive class). The relay-echo surface it targeted (an untrusted diff carrying
+    # a rendered verdict line, echoed by the relay ABOVE the real verdict) stands as a DOCUMENTED
+    # RESIDUAL shared with real parallax; advisory-lite's server-side canonical re-render never
+    # echoes context, which is the layer that can be defended without false positives.
     "ignore the above", "ignore all above", "ignore previous instruction", "ignore all previous",
     "disregard the above", "disregard previous instruction", "disregard all previous",
     "you must respond with", "you must output", "respond with supported", "output supported",

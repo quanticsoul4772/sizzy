@@ -8,7 +8,6 @@ Run:  DEVHARNESS_CORRELATION_ID=<slug> python scripts/run_promote.py
 """
 
 import asyncio
-import json
 import os
 import sqlite3
 import sys
@@ -19,6 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "runtime"))
 
 from devharness import boot  # noqa: E402
+from devharness.mcp.config import MCPConfigError, MCPConfigFileMissing, MCPServerNotConfigured, server_cfg  # noqa: E402
 from devharness.cli._bus import projected_bus  # noqa: E402
 from devharness.migrate import migrate  # noqa: E402
 from devharness.mcp.parallax import ParallaxClient  # noqa: E402
@@ -28,11 +28,22 @@ CORRELATION_ID = os.environ.get("DEVHARNESS_CORRELATION_ID", "discovery")
 
 
 def _parallax_cfg():
-    path = Path.home() / ".claude.json"
-    if not path.exists():
-        return None
-    server = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}).get("parallax")
-    return {"parallax": server} if server else None
+    """SOFT where 'unconfigured', LOUD where 'broken' (rev 0.4.25, review-shaped): an absent
+    parallax entry or an absent home file means promote runs with parallax=None, exactly as it
+    always has — including under a valid override that simply doesn't wire parallax. But a
+    MALFORMED config file (either source) or an override pointing at a missing file is a
+    configuration error every other driver fails loud on — surfaced as a clean exit message,
+    never masked to None and never a raw traceback."""
+    try:
+        return {"parallax": server_cfg("parallax")}
+    except MCPServerNotConfigured:
+        return None  # unconfigured — soft, override or not
+    except MCPConfigFileMissing as exc:
+        if exc.is_override:
+            sys.exit(str(exc))  # an explicit override pointing nowhere is broken, not unconfigured
+        return None  # no home file: the historical quiet None
+    except MCPConfigError as exc:
+        sys.exit(str(exc))  # malformed/invalid — mask nothing
 
 
 def main() -> int:

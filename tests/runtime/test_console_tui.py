@@ -548,12 +548,14 @@ async def test_developer_surface_passes_the_set_target():
         tui._target_path = "../dedup"
         tui._test_command = ["python", "-m", "pytest", "-q"]
         tui._developer_surface(None, None)
-        assert captured == {"base_path": "../dedup", "test_command": ["python", "-m", "pytest", "-q"]}
+        assert captured == {"auto_retro": True, "base_path": "../dedup",
+                            "test_command": ["python", "-m", "pytest", "-q"]}
         captured.clear()
         tui._target_path = None
         tui._test_command = None
         tui._developer_surface(None, None)
-        assert captured == {}  # no target -> ConsoleDeveloper's own env/defaults apply
+        # no target -> ConsoleDeveloper's own env/defaults apply; auto_retro always on (rev 0.4.23)
+        assert captured == {"auto_retro": True}
 
 
 async def test_set_target_persists_and_a_new_console_restores_it(tmp_path):
@@ -1038,3 +1040,29 @@ async def test_discover_omits_foreign_dbs(tmp_path):
     async with tui.run_test():
         names = {n for (_p, n, _t) in tui._discover_projects()}
         assert "projA" in names and "parallax" not in names
+
+
+async def test_retro_run_action_drains_via_shared_helper(tmp_path, monkeypatch):
+    # rev 0.4.23: `L` runs the §S7 explicit retro drain against the connected store through the shared
+    # run_retro_drain (the same helper the post-build auto-drain and the panel route use), as a
+    # thread-worker build step (own read conn; emits proxied to the main-thread writer).
+    from devharness.console import tui as tui_mod
+
+    db = str(tmp_path / "ev.db")
+    app = ConsoleApp(db_path=db).connect()
+    tui = ConsoleTUI(console=app, consumer_factory=_EmptyConsumer)
+    called = {}
+
+    def fake_drain(conn, bus, **kw):
+        called["worker_conn"] = conn is not app.conn
+        return {"summary": "2 terminal(s) analyzed · 0 signal(s)", "terminals": ["t1", "t2"],
+                "signals": [], "halted": False, "halt_reason": "", "held": False}
+
+    monkeypatch.setattr(tui_mod, "run_retro_drain", fake_drain)
+    async with tui.run_test():
+        assert ("L", "retro_run", "retro run") in ConsoleTUI.BINDINGS
+        tui.action_retro_run()
+        assert tui._busy == "retro run"
+        await tui._active_worker.wait()
+        assert tui._busy is None
+    assert called["worker_conn"] is True  # the drain ran on the worker's own connection

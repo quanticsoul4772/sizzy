@@ -409,6 +409,9 @@ class RetroRun(msgspec.Struct, frozen=True, kw_only=True):
     retro_run_at_millis: int
     correlation_id: str
     schema_version: int = 1
+    # rev 0.4.24 additive: candidates the duplicate-candidate guard suppressed pre-emit (a
+    # suppressed-only run is distinguishable from a genuinely-empty one)
+    candidates_suppressed_count: int = 0
 
 
 class OssWorktreeCreated(msgspec.Struct, frozen=True, kw_only=True):

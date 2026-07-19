@@ -22,3 +22,5 @@ class RetroResult(msgspec.Struct, frozen=True, kw_only=True):
     t0_matched_signatures: list = []
     llm_invoked: bool = False
     candidate_kinds: list = []
+    # rev 0.4.24 additive: candidates the duplicate-candidate guard suppressed pre-emit (conn threaded)
+    candidates_suppressed_count: int = 0

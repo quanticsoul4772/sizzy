@@ -13,6 +13,7 @@ follow-ups are in the plan's §Post-B5 open-items block.
 > `devharness-spec.md`'s revision history. Commit SHAs from the private pre-release
 > history do not resolve on this fresh-history mirror and have been dropped.
 
+## [Post-B5 — learning-spine remediation + install-easing + advisory-lite] — 2026-07-18 — spec rev 0.4.22 → 0.4.26
 ## [Post-B5 — bugfix-class hunt: all five BUILD classes console-driven + the defect stack it exposed] — 2026-07-02 — spec rev 0.3.72 → 0.3.80, plan v0.9.12 → v0.9.13
 ## [Post-B5 — console maturation, roadmap closure, projects 5–8] — 2026-06-30 → 2026-07-02 — spec rev 0.3.47 → 0.3.72, plan v0.9.11 → v0.9.12
 ## [Post-B5 — fourth harness-built artifact: the operator console + the three defects it surfaced] — 2026-06-29 — spec rev 0.3.46 → 0.3.47, plan v0.9.10 → v0.9.11

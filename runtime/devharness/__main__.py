@@ -9,7 +9,7 @@ previously only `python -m devharness.cli.<subcommand>` worked. Each cli module 
 import importlib
 import sys
 
-_SUBCOMMANDS = ("answer", "sign", "retro", "memory", "ratify", "prune", "questions", "work-items", "sweep", "backfill")
+_SUBCOMMANDS = ("init", "answer", "sign", "retro", "memory", "ratify", "prune", "questions", "work-items", "sweep", "backfill")
 
 
 def main(argv=None) -> int:

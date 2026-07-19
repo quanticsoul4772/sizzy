@@ -31,7 +31,7 @@ def _host_of(authority: str) -> str:
     return v.partition(":")[0]
 
 from devharness.console.assemble import ConsoleAssemble
-from devharness.console.developer import ConsoleDeveloper, live_parallax_client
+from devharness.console.developer import ConsoleDeveloper, live_parallax_client, run_retro_drain
 from devharness.console.director import ConsoleDirector
 from devharness.console.progress import PROGRESS_EVENTS, frame_line
 from devharness.console.research import ConsoleResearch
@@ -379,7 +379,8 @@ class PanelHandler(BaseHTTPRequestHandler):
             kwargs = {"base_path": s.target_path} if s.target_path is not None else {}
             if s.test_command is not None:
                 kwargs["test_command"] = s.test_command
-            return ConsoleDeveloper(conn, bus, **kwargs).dispatch(cid, task_id=body.get("task_id"))
+            # auto_retro: every panel-driven build feeds the §S7 spine post-build (rev 0.4.23)
+            return ConsoleDeveloper(conn, bus, auto_retro=True, **kwargs).dispatch(cid, task_id=body.get("task_id"))
         return self._send_json(202, {"job_id": self.panel.runner.submit("developer dispatch", step)})
 
     def post_certify(self, body):
@@ -390,6 +391,15 @@ class PanelHandler(BaseHTTPRequestHandler):
         def step(conn, bus, cancel):
             return ConsoleReview(conn, bus).certify(task_id)
         return self._send_json(202, {"job_id": self.panel.runner.submit("certify", step)})
+
+    def post_retro_run(self, body):
+        # §S7 explicit retro drain (rev 0.4.23): T0 + T1 LLM residue over every unprocessed terminal +
+        # signal in the connected store. The post-build auto-drain covers normal flow; this is the
+        # backlog / parked-store trigger. Heavy (LLM spend per clean-residue terminal) -> BuildRunner
+        # job; result via /job/{id}. A fermata-held store reports HELD, distinct from queue-empty.
+        def step(conn, bus, cancel):
+            return run_retro_drain(conn, bus)["summary"]
+        return self._send_json(202, {"job_id": self.panel.runner.submit("retro run", step)})
 
     def post_cancel(self, body):
         job_id = body.get("job_id") or self.panel.runner.busy_job
@@ -421,6 +431,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         "/certify": post_certify,
         "/integrate": post_integrate,
         "/assemble": post_assemble,
+        "/retro/run": post_retro_run,
         "/target/set": post_target_set,
         "/project/new": post_project_new,
         "/project/switch": post_project_switch,

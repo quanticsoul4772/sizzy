@@ -16,14 +16,13 @@ When it prints a spec_id, review the drafted spec, then sign the operator gate:
     python -m devharness.cli.sign <spec_id>
 
 The parallax MCP server launch spec (which carries API keys in its env) is read live
-from ~/.claude.json at runtime and passed in memory to the Agent SDK — never embedded
+at runtime (DEVHARNESS_MCP_CONFIG, else ~/.claude.json) and passed in memory to the Agent SDK — never embedded
 in this file.
 
 Run:  python scripts/run_research.py
 """
 
 import asyncio
-import json
 import os
 import sqlite3
 import sys
@@ -33,6 +32,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "runtime"))
 
 from devharness import boot  # noqa: E402
+from devharness.mcp.config import MCPConfigError, server_cfg  # noqa: E402
 from devharness.events.bus import EventBus  # noqa: E402
 from devharness.mcp.parallax import ParallaxClient  # noqa: E402
 from devharness.models import model_for_tier  # noqa: E402
@@ -64,14 +64,12 @@ SEED = os.environ.get("DEVHARNESS_SEED") or (
 
 
 def _parallax_server_config() -> dict:
-    """Read the live parallax stdio launch spec from ~/.claude.json (never embed it)."""
-    path = Path.home() / ".claude.json"
-    if not path.exists():
-        sys.exit(f"no {path} — cannot find the parallax MCP server launch spec")
-    server = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}).get("parallax")
-    if not server:
-        sys.exit("parallax not found under mcpServers in ~/.claude.json")
-    return {"parallax": server}
+    """The live parallax stdio launch spec (rev 0.4.25: via the single config source,
+    honoring DEVHARNESS_MCP_CONFIG with the ~/.claude.json fallback; never embedded)."""
+    try:
+        return {"parallax": server_cfg("parallax")}
+    except MCPConfigError as exc:
+        sys.exit(str(exc))
 
 
 def main() -> int:

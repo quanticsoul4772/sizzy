@@ -59,6 +59,7 @@
                border-radius:8px; padding:10px; font-weight:600; cursor:pointer; }
   .warnbanner { margin-top:8px; background:#3a2d10; border:1px solid #5c4a1e; color:#e3b341;
                border-radius:8px; padding:10px; font-weight:600; }
+  .jobline { margin-top:8px; color:var(--mut); font-size:13px; padding:2px 4px; }
   .overlay { position:fixed; inset:0; background:#000d; z-index:99; padding:12px;
              display:flex; flex-direction:column; gap:8px; }
   .overlay .body { flex:1; overflow:auto; background:var(--card); border:1px solid var(--line);
@@ -80,6 +81,7 @@
   </div>
   <div id="errbanner" class="errbanner" style="display:none" onclick="copyDiag()"></div>
   <div id="noticebanner" class="warnbanner" style="display:none"></div>
+  <div id="jobline" class="jobline" style="display:none"></div>
 </header>
 <main>
   <div class="card" id="researchCard">
@@ -115,6 +117,7 @@
         <button id="advCertify" class="sec mini" onclick="taskAct('/certify')">Certify</button>
         <button id="advIntegrate" class="sec mini" onclick="taskAct('/integrate')">Integrate</button>
         <button id="advBuild" class="sec mini" onclick="taskAct('/dispatch')">Build this</button>
+        <button id="advRetro" class="sec mini" onclick="act('/retro/run')">Retro drain</button>
       </div>
     </details>
   </div>
@@ -284,7 +287,7 @@ function gateButtons(s){
   $('answerBtn').disabled=false;
   for(const id of ['researchBtn','viewSpecBtn','signBtn','rejectBtn','planBtn','buildBtn',
                    'assembleBtn','targetBtn','newProjBtn','switchBtn',
-                   'advCertify','advIntegrate','advBuild'])
+                   'advCertify','advIntegrate','advBuild','advRetro'])
     $(id).disabled=busy;
   if(!busy){
     $('viewSpecBtn').disabled=!spec; $('signBtn').disabled=!spec; $('rejectBtn').disabled=!spec;
@@ -333,6 +336,14 @@ async function refresh(){
   if(lj && lj.status==='error'){ eb.style.display='block';
     eb.textContent='⚠ '+lj.label+' failed — tap to copy diagnostics for Claude'; }
   else eb.style.display='none';
+  // rev 0.4.23: a DONE job's result was silent (only errors surfaced) — so the retro drain's
+  // HELD / HALTED / n-analyzed summary vanished and a held store read as drained. Show it.
+  const jl=$('jobline');
+  if(lj && lj.status==='done' && lj.result && lj.result!=='None'){ jl.style.display='block';
+    jl.textContent='✔ '+lj.label+': '+lj.result; }
+  else if(lj && lj.status==='cancelled'){ jl.style.display='block';
+    jl.textContent='✕ '+lj.label+' cancelled'; }
+  else jl.style.display='none';
 }
 async function pollLog(){
   try { const d=await api('/events?after='+lastSeq);
